@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Predictions Workshop · CAIS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { background: #080612; }
+  textarea::placeholder { color: rgba(255,255,255,0.2); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useMemo, useCallback } = React;
+
+const DOT_R = 6.5;
+const AXIS_Y = 46;
+const ROW_H = 92;
+const CHART_W = 560;
+const LABEL_W = 224;
+
+const QUESTION_LABELS = {
+  1:  "Drop-in remote AI workers",
+  2:  "AI-run B2B business",
+  3:  "AI/automation top voter issue",
+  4:  "Robots build a house",
+  5:  "$100B AI-operated company",
+  6:  "100× energy use",
+  7:  "4+ Millennium Problems solved",
+  8:  "Anti-aging therapy",
+  9:  "Preserved humanity",
+  10: "Humans not primary authors of culture",
+  11: "Legal personhood parity",
+  12: "Loss of human oversight capacity",
+};
+
+const DISCIPLINE_COLORS = [
+  { key: "econom",    color: "#60a5fa", label: "Economics"        },
+  { key: "politi",    color: "#4ade80", label: "Political Science" },
+  { key: "philosoph", color: "#e879f9", label: "Philosophy"       },
+  { key: "law",       color: "#fb923c", label: "Law"              },
+  { key: "legal",     color: "#fb923c", label: "Law"              },
+  { key: "sociol",    color: "#f472b6", label: "Sociology"        },
+  { key: "comput",    color: "#38bdf8", label: "CS / Tech"        },
+  { key: "tech",      color: "#38bdf8", label: "CS / Tech"        },
+];
+
+function getDiscipline(b1) {
+  if (!b1) return { color: "#a78bfa", label: "—" };
+  const lower = b1.toLowerCase();
+  for (const d of DISCIPLINE_COLORS) {
+    if (lower.includes(d.key)) return { color: d.color, label: d.label };
+  }
+  return { color: "#94a3b8", label: "Other" };
+}
+
+function computeBeeswarm(data, xScale) {
+  if (!data.length) return [];
+  const nodes = data.map((d) => ({ ...d, x: xScale(d.value), y: 0 }));
+  const sim = d3.forceSimulation(nodes)
+    .force("x", d3.forceX((d) => xScale(d.value)).strength(1))
+    .force("y", d3.forceY(0).strength(0.07))
+    .force("collide", d3.forceCollide(DOT_R + 2).strength(0.95))
+    .stop();
+  for (let i = 0; i < 240; i++) sim.tick();
+  return nodes;
+}
+
+function parseCSVText(text) {
+  const parsed = Papa.parse(text.trim(), { header: true, skipEmptyLines: true });
+  if (!parsed.data.length) throw new Error("No data rows found.");
+  const headers = parsed.meta.fields;
+  const nameCol = headers.find((h) => h.trim().toLowerCase() === "name") || headers[2];
+  const bgCol   = headers.find((h) => h.startsWith("B1.")) || headers[3];
+  const probCols = headers.filter((h) => h.includes("Your probability"));
+  if (!probCols.length) throw new Error("Could not find any 'Your probability' columns. Make sure you copied the full sheet including the header row.");
+
+  const responsesByQ = {};
+  probCols.forEach((col, i) => {
+    responsesByQ[i + 1] = parsed.data
+      .filter((row) => {
+        const v = Number(row[col]);
+        return row[nameCol] && row[nameCol].trim() && row[col] !== "" && !isNaN(v);
+      })
+      .map((row) => {
+        const { color, label } = getDiscipline(row[bgCol]);
+        return {
+          name: row[nameCol].trim(),
+          value: Number(row[col]),
+          disciplineColor: color,
+          disciplineLabel: label,
+        };
+      });
+  });
+  return { probCols, responsesByQ, totalRows: parsed.data.length };
+}
+
+const TICKS = [0, 25, 50, 75, 100];
+
+function QuestionRow({ responses, index, showDiscipline }) {
+  const [tooltip, setTooltip] = useState(null);
+  const xScale = useMemo(() => d3.scaleLinear().domain([0, 100]).range([0, CHART_W]), []);
+  const nodes  = useMemo(() => computeBeeswarm(responses, xScale), [responses, xScale]);
+  const mean   = useMemo(() => d3.mean(responses, (r) => r.value), [responses]);
+  const isEven = index % 2 === 0;
+
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", minHeight: ROW_H,
+      background: isEven ? "rgba(255,255,255,0.012)" : "transparent",
+      borderBottom: "1px solid rgba(255,255,255,0.055)",
+    }}>
+      <div style={{ width: LABEL_W, minWidth: LABEL_W, paddingRight: 20, paddingLeft: 4, textAlign: "right" }}>
+        <div style={{ fontSize: 11, fontFamily: "'DM Mono', monospace", color: "rgba(255,255,255,0.28)", letterSpacing: "0.06em", marginBottom: 3 }}>
+          Q{index + 1}
+        </div>
+        <div style={{ fontSize: 12.5, color: "rgba(255,255,255,0.65)", lineHeight: 1.35 }}>
+          {QUESTION_LABELS[index + 1] || ("Question " + (index + 1))}
+        </div>
+        {responses.length > 0 && (
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.2)", marginTop: 4, fontFamily: "'DM Mono', monospace" }}>
+            n={responses.length}{mean != null ? " · μ=" + mean.toFixed(0) + "%" : ""}
+          </div>
+        )}
+      </div>
+
+      <div style={{ position: "relative" }}>
+        <svg width={CHART_W} height={ROW_H}>
+          <defs>
+            <linearGradient id={"zone-" + index} x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0%"   stopColor="#ef4444" stopOpacity="0.07" />
+              <stop offset="50%"  stopColor="#f59e0b" stopOpacity="0.04" />
+              <stop offset="100%" stopColor="#22c55e" stopOpacity="0.08" />
+            </linearGradient>
+          </defs>
+          <rect x={0} y={0} width={CHART_W} height={ROW_H} fill={"url(#zone-" + index + ")"} />
+          <line x1={xScale(50)} x2={xScale(50)} y1={0} y2={ROW_H} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
+          <line x1={0} x2={CHART_W} y1={AXIS_Y} y2={AXIS_Y} stroke="rgba(255,255,255,0.1)" strokeWidth={1} />
+          {TICKS.map((v) => (
+            <g key={v}>
+              <line x1={xScale(v)} x2={xScale(v)} y1={AXIS_Y - 3} y2={AXIS_Y + 3} stroke="rgba(255,255,255,0.18)" />
+              <text x={xScale(v)} y={ROW_H - 7} textAnchor="middle" fontSize={8.5} fill="rgba(255,255,255,0.2)" fontFamily="'DM Mono', monospace">{v}</text>
+            </g>
+          ))}
+          {mean != null && (
+            <React.Fragment>
+              <line x1={xScale(mean)} x2={xScale(mean)} y1={8} y2={AXIS_Y} stroke="#fbbf24" strokeWidth={1.5} strokeDasharray="3,3" opacity={0.65} />
+              <circle cx={xScale(mean)} cy={AXIS_Y} r={2.5} fill="#fbbf24" opacity={0.7} />
+              <text x={xScale(mean)} y={5} textAnchor="middle" fontSize={8} fill="#fbbf24" opacity={0.7} fontFamily="'DM Mono', monospace">{mean.toFixed(0)}</text>
+            </React.Fragment>
+          )}
+          {nodes.map((node, i) => {
+            const cx = Math.max(DOT_R, Math.min(CHART_W - DOT_R, node.x));
+            const cy = Math.max(DOT_R + 12, Math.min(AXIS_Y - DOT_R - 1, AXIS_Y + node.y));
+            return (
+              <circle key={i} cx={cx} cy={cy} r={DOT_R}
+                fill={showDiscipline ? node.disciplineColor : "#a78bfa"}
+                fillOpacity={0.85} stroke="rgba(0,0,0,0.45)" strokeWidth={1.5}
+                style={{ cursor: "crosshair" }}
+                onMouseEnter={(e) => setTooltip({ name: node.name, value: node.value, discipline: node.disciplineLabel, color: showDiscipline ? node.disciplineColor : "#a78bfa", x: e.clientX, y: e.clientY })}
+                onMouseLeave={() => setTooltip(null)}
+              />
+            );
+          })}
+        </svg>
+        {tooltip && (
+          <div style={{
+            position: "fixed", left: tooltip.x + 14, top: tooltip.y - 16,
+            background: "rgba(10,8,20,0.96)", border: "1px solid " + tooltip.color + "55",
+            borderRadius: 7, padding: "8px 13px", fontSize: 13, color: "#e2e8f0",
+            pointerEvents: "none", zIndex: 9999, whiteSpace: "nowrap",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.55)",
+          }}>
+            <span style={{ color: tooltip.color, fontWeight: 600 }}>{tooltip.name}</span>
+            {showDiscipline && tooltip.discipline && tooltip.discipline !== "—" && (
+              <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, marginLeft: 6 }}>{tooltip.discipline}</span>
+            )}
+            <span style={{ color: "rgba(255,255,255,0.2)", margin: "0 8px" }}>·</span>
+            <span style={{ fontWeight: 700, fontFamily: "'DM Mono', monospace" }}>{tooltip.value}%</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Btn({ active, activeColors, children, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      background: active ? activeColors.bg : "rgba(255,255,255,0.06)",
+      color:      active ? activeColors.fg : "rgba(255,255,255,0.4)",
+      border:     "1px solid " + (active ? activeColors.border : "rgba(255,255,255,0.1)"),
+      borderRadius: 8, padding: "9px 14px", fontSize: 12,
+      cursor: "pointer", fontFamily: "'DM Mono', monospace", letterSpacing: "0.04em",
+    }}>{children}</button>
+  );
+}
+
+function App() {
+  const [csvText,   setCsvText]   = useState("");
+  const [parsed,    setParsed]    = useState(null);
+  const [error,     setError]     = useState(null);
+  const [showDisc,  setShowDisc]  = useState(false);
+  const [showPaste, setShowPaste] = useState(true);
+
+  const load = useCallback(() => {
+    setError(null);
+    try {
+      const result = parseCSVText(csvText);
+      setParsed(result);
+      setShowPaste(false);
+    } catch (e) {
+      setError(e.message);
+    }
+  }, [csvText]);
+
+  const disciplines = useMemo(() => {
+    if (!parsed) return [];
+    const seen = new Map();
+    Object.values(parsed.responsesByQ).forEach((rs) =>
+      rs.forEach((r) => { if (!seen.has(r.disciplineLabel)) seen.set(r.disciplineLabel, r.disciplineColor); })
+    );
+    return [...seen.entries()].map(([label, color]) => ({ label, color }));
+  }, [parsed]);
+
+  return (
+    <div style={{
+      minHeight: "100vh",
+      background: "linear-gradient(160deg, #080612 0%, #0d0a1a 60%, #080612 100%)",
+      color: "#e2e8f0",
+      fontFamily: "'DM Sans', 'Helvetica Neue', sans-serif",
+      padding: "40px 36px",
+      boxSizing: "border-box",
+    }}>
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(167,139,250,0.7)", marginBottom: 8, fontFamily: "'DM Mono', monospace" }}>
+          CAIS · AI &amp; Society Summer Fellowship
+        </div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 16 }}>
+          <h1 style={{ fontSize: 26, fontWeight: 700, color: "rgba(255,255,255,0.92)", margin: 0, letterSpacing: "-0.02em" }}>
+            Predictions Workshop
+          </h1>
+          {parsed && (
+            <span style={{ fontSize: 13, color: "rgba(255,255,255,0.25)", fontFamily: "'DM Mono', monospace" }}>
+              {parsed.totalRows} response{parsed.totalRows !== 1 ? "s" : ""}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {showPaste && (
+        <div style={{ marginBottom: 28, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 10, padding: 20 }}>
+          <div style={{ fontSize: 11, fontFamily: "'DM Mono', monospace", color: "rgba(255,255,255,0.35)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 12 }}>
+            Paste CSV data
+          </div>
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.3)", lineHeight: 1.8, marginBottom: 14, fontFamily: "'DM Mono', monospace" }}>
+            In Google Sheets → <span style={{ color: "rgba(255,255,255,0.55)" }}>File → Download → Comma Separated Values</span><br />
+            Open the file, select all, copy, paste below.
+          </div>
+          <textarea
+            value={csvText}
+            onChange={(e) => setCsvText(e.target.value)}
+            placeholder="Timestamp,Email Address,Name,B1. Your professional background..."
+            style={{
+              width: "100%", height: 110, background: "rgba(0,0,0,0.3)",
+              border: "1px solid rgba(255,255,255,0.1)", borderRadius: 7,
+              padding: "10px 12px", color: "rgba(255,255,255,0.75)",
+              fontSize: 11.5, fontFamily: "'DM Mono', monospace",
+              resize: "vertical", outline: "none", boxSizing: "border-box",
+            }}
+          />
+          {error && (
+            <div style={{ marginTop: 10, fontSize: 12, color: "#fca5a5", fontFamily: "'DM Mono', monospace" }}>⚠ {error}</div>
+          )}
+          <button
+            onClick={load}
+            disabled={!csvText.trim()}
+            style={{
+              marginTop: 12, background: "rgba(139,92,246,0.85)", color: "white",
+              border: "none", borderRadius: 8, padding: "9px 22px",
+              fontSize: 13, fontWeight: 600, cursor: csvText.trim() ? "pointer" : "not-allowed",
+              opacity: csvText.trim() ? 1 : 0.4, fontFamily: "inherit",
+            }}
+          >
+            Load →
+          </button>
+        </div>
+      )}
+
+      {parsed && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+          <Btn active={!showPaste}
+            activeColors={{ bg: "rgba(255,255,255,0.08)", fg: "rgba(255,255,255,0.6)", border: "rgba(255,255,255,0.2)" }}
+            onClick={() => setShowPaste(v => !v)}>
+            {showPaste ? "▲ HIDE INPUT" : "↺ UPDATE DATA"}
+          </Btn>
+          <Btn active={showDisc}
+            activeColors={{ bg: "rgba(167,139,250,0.18)", fg: "rgba(196,181,253,0.9)", border: "rgba(167,139,250,0.3)" }}
+            onClick={() => setShowDisc(v => !v)}>
+            {showDisc ? "● BY DISCIPLINE" : "○ BY DISCIPLINE"}
+          </Btn>
+        </div>
+      )}
+
+      {parsed && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", gap: 22, marginBottom: 10, fontSize: 11, color: "rgba(255,255,255,0.28)", alignItems: "center", fontFamily: "'DM Mono', monospace", letterSpacing: "0.04em", flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              <div style={{ width: 9, height: 9, borderRadius: "50%", background: "rgba(255,255,255,0.5)" }} />
+              PARTICIPANT (HOVER)
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              <svg width={20} height={10}><line x1={0} x2={20} y1={5} y2={5} stroke="#fbbf24" strokeWidth={1.5} strokeDasharray="3,3" opacity={0.65} /></svg>
+              GROUP MEAN
+            </div>
+            <div style={{ marginLeft: "auto", color: "rgba(255,255,255,0.15)" }}>
+              <span style={{ color: "rgba(239,68,68,0.45)" }}>0 impossible</span>
+              <span style={{ margin: "0 8px" }}>·</span>50 coin flip
+              <span style={{ margin: "0 8px" }}>·</span>
+              <span style={{ color: "rgba(34,197,94,0.45)" }}>100 certain</span>
+            </div>
+          </div>
+          {showDisc && disciplines.length > 0 && (
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.3)", fontFamily: "'DM Mono', monospace", letterSpacing: "0.04em" }}>
+              {disciplines.map(({ label, color }) => (
+                <div key={label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, opacity: 0.85 }} />
+                  {label.toUpperCase()}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {parsed && (
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+          {parsed.probCols.map((col, i) => (
+            <QuestionRow
+              key={col}
+              responses={parsed.responsesByQ[i + 1] || []}
+              index={i}
+              showDiscipline={showDisc}
+            />
+          ))}
+        </div>
+      )}
+
+      {!parsed && !showPaste && (
+        <div style={{ textAlign: "center", marginTop: 80, color: "rgba(255,255,255,0.08)" }}>
+          <div style={{ fontSize: 52, marginBottom: 14 }}>◈</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
